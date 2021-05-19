@@ -1,0 +1,25 @@
+sensor sensor8
+sensor sensor9
+sensor clock
+sensor alt_sens
+sensor fuel_pct
+actuator compressor
+
+block firstblock
+    set compressor 1.0
+    wait:
+        - any:
+            - all:
+                - sensor8 = 100
+                - sensor9 = 125
+            - clock = 10000000
+
+    if:
+        - all:
+            - alt_sens <= 100
+            - fuel_pct <= 14
+        goto secondblock
+    else:
+        goto anotherblock
+endblock
+
