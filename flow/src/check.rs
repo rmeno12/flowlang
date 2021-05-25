@@ -2,10 +2,22 @@ use crate::token::Token;
 
 pub fn check(tokens: &[Token]) -> Result<(), &'static str> {
     // check devices
-    let out = devices(&tokens)?;
+    let mut out = devices(&tokens)?;
+
+    // consume newline
+    if let Token::Newline = &tokens[out] {
+        out += 1;
+    } else {
+        return Err("Expected newline");
+    }
+
     // check blocks
-    let out = blocks(&tokens[out..], out)?;
-    Ok(())
+    out = blocks(&tokens[out..], out)?;
+    if out < tokens.len() {
+        Err("Unexpcted tokens")
+    } else {
+        Ok(())
+    }
 }
 
 fn devices(tokens: &[Token]) -> Result<usize, &'static str> {
@@ -13,13 +25,21 @@ fn devices(tokens: &[Token]) -> Result<usize, &'static str> {
     while out < tokens.len() {
         match &tokens[out] {
             Token::Actuator | Token::Sensor => {
-                let kind = &tokens[out];
                 out += 1;
+
+                // consume name of device
                 if let Token::Identifier(name) = &tokens[out] {
+                    out += 1;
                 } else {
                     return Err("Expected identifier");
                 }
-                out += 1;
+
+                // consume newline
+                if let Token::Newline = &tokens[out] {
+                    out += 1;
+                } else {
+                    return Err("Expected newline");
+                }
             }
             _ => {
                 break;
@@ -47,8 +67,20 @@ fn blocks(tokens: &[Token], start: usize) -> Result<usize, &'static str> {
         } else {
             return Err("Unexpected token");
         }
+
+        // consume newline
+        if let Token::Newline = &tokens[out] {
+            out += 1;
+        } else {
+            return Err("Expected newline");
+        }
+
+        // consume extra newlines
+        while let Token::Newline = &tokens[out] {
+            out += 1;
+        }
     }
-    Ok(0)
+    Ok(out)
 }
 
 fn block(tokens: &[Token], start: usize) -> Result<usize, &'static str> {
@@ -71,6 +103,9 @@ fn block(tokens: &[Token], start: usize) -> Result<usize, &'static str> {
             Token::Goto => {}
             Token::Wait => {}
             Token::If => {}
+            Token::Newline => {
+                out += 1;
+            }
             _ => {
                 return Err("Unexpected token");
             }
@@ -94,4 +129,17 @@ fn wait(tokens: &[Token], start: usize) -> Result<usize, &'static str> {
 
 fn if_else(tokens: &[Token], start: usize) -> Result<usize, &'static str> {
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple() {
+        use crate::token;
+        let code = std::fs::read_to_string("tests/simple.fl").expect("Couldn't open file");
+        let toks = token::tokenize(code);
+        assert!(check(&toks).is_ok());
+    }
 }
