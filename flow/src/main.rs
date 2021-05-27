@@ -1,5 +1,7 @@
 use std::{env, fs, panic::panic_any};
 
+mod ast;
+mod astdef;
 mod check;
 mod token;
 
