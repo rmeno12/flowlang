@@ -5,7 +5,7 @@ use crate::token::Token;
 #[derive(Debug)]
 pub struct AST {
     first_block_name: String,
-    devices: Vec<Device>,
+    devices: HashMap<String, Device>,
     blocks: HashMap<String, Block>,
 }
 
@@ -16,14 +16,14 @@ pub enum Device {
 }
 
 // for now actuators/sensors can only be floats internally
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Actuator {
     name: String,
     min: f64,
     max: f64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sensor {
     name: String,
     min: f64,
@@ -57,14 +57,14 @@ pub enum Operation {
 
 #[derive(Debug)]
 pub enum Condition {
-    Base(Sensor),
+    Base(Sensor, f64),
     All(Vec<Condition>),
     Any(Vec<Condition>),
 }
 
 pub fn make_ast(tokens: &[Token]) -> Result<AST, &'static str> {
     let (devices, mut idx) = make_devices(&tokens)?;
-    println!("{:?}", devices);
+    // println!("{:?}", devices);
 
     // consume newline
     if let Token::Newline = &tokens[idx] {
@@ -73,18 +73,19 @@ pub fn make_ast(tokens: &[Token]) -> Result<AST, &'static str> {
         return Err("Expected newline after end of device list");
     }
 
-    let (blocks, idx) = make_blocks(&tokens, idx)?;
+    let (first_block_name, blocks, newidx) = make_blocks(&tokens, idx, &devices)?;
+    idx = newidx;
 
     Ok(AST {
-        first_block_name: String::from("hi"),
+        first_block_name,
         devices,
         blocks,
     })
 }
 
-fn make_devices(tokens: &[Token]) -> Result<(Vec<Device>, usize), &'static str> {
+fn make_devices(tokens: &[Token]) -> Result<(HashMap<String, Device>, usize), &'static str> {
     let mut outsize = 0;
-    let mut devices: Vec<Device> = Vec::new();
+    let mut devices: HashMap<String, Device> = HashMap::new();
     while outsize < tokens.len() {
         match &tokens[outsize] {
             Token::Actuator | Token::Sensor => {
@@ -108,23 +109,26 @@ fn make_devices(tokens: &[Token]) -> Result<(Vec<Device>, usize), &'static str> 
                     return Err("Expected newline after device declaration");
                 }
 
-                devices.push(match devkind {
-                    Token::Actuator => Device::Actuator(Actuator {
-                        name: dev_name,
-                        min: f64::MIN,
-                        max: f64::MAX,
-                    }),
-                    Token::Sensor => Device::Sensor(Sensor {
-                        name: dev_name,
-                        min: f64::MIN,
-                        max: f64::MAX,
-                    }),
-                    _ => Device::Sensor(Sensor {
-                        name: dev_name,
-                        min: 0.0,
-                        max: 0.0,
-                    }),
-                });
+                devices.insert(
+                    dev_name.clone(),
+                    match devkind {
+                        Token::Actuator => Device::Actuator(Actuator {
+                            name: dev_name,
+                            min: f64::MIN,
+                            max: f64::MAX,
+                        }),
+                        Token::Sensor => Device::Sensor(Sensor {
+                            name: dev_name,
+                            min: f64::MIN,
+                            max: f64::MAX,
+                        }),
+                        _ => Device::Sensor(Sensor {
+                            name: String::from(""),
+                            min: 0.0,
+                            max: 0.0,
+                        }),
+                    },
+                );
             }
             _ => {
                 break;
@@ -137,9 +141,11 @@ fn make_devices(tokens: &[Token]) -> Result<(Vec<Device>, usize), &'static str> 
 fn make_blocks(
     tokens: &[Token],
     start: usize,
-) -> Result<(HashMap<String, Block>, usize), &'static str> {
+    devices: &HashMap<String, Device>,
+) -> Result<(String, HashMap<String, Block>, usize), &'static str> {
     let mut idx = start;
     let mut blocks: HashMap<String, Block> = HashMap::new();
+    let mut first_block_name: Option<String> = None;
     while idx < tokens.len() {
         // consume the startblock
         if let Token::StartBlock = &tokens[idx] {
@@ -148,8 +154,11 @@ fn make_blocks(
             return Err("Expected block declaration");
         }
 
-        let (block_name, block, newidx) = make_block(tokens, idx)?;
+        let (block_name, block, newidx) = make_block(tokens, idx, &devices)?;
         idx = newidx;
+        if let None = first_block_name {
+            first_block_name = Some(block_name.clone());
+        }
         blocks.insert(block_name, block);
 
         // consume the endblock
@@ -176,12 +185,16 @@ fn make_blocks(
             }
         }
     }
-    Ok((HashMap::new(), 0))
+    Ok((first_block_name.expect("No blocks provided"), blocks, idx))
 }
 
-fn make_block(tokens: &[Token], start: usize) -> Result<(String, Block, usize), &'static str> {
+fn make_block(
+    tokens: &[Token],
+    start: usize,
+    devices: &HashMap<String, Device>,
+) -> Result<(String, Block, usize), &'static str> {
     let mut idx = start;
-    let mut ops: Vec<Operation> = Vec::new();
+
     // consume the block name
     let block_name: String;
     if let Token::Identifier(name) = &tokens[idx] {
@@ -198,13 +211,57 @@ fn make_block(tokens: &[Token], start: usize) -> Result<(String, Block, usize), 
         return Err("Expected newline after block name");
     }
 
+    let (ops, newidx) = make_statements(tokens, idx, devices, 1)?;
+    idx = newidx;
+
+    Ok((block_name, Block { ops }, idx))
+}
+
+fn make_statements(
+    tokens: &[Token],
+    start: usize,
+    devices: &HashMap<String, Device>,
+    tabdepth: u8,
+) -> Result<(Vec<Operation>, usize), &'static str> {
+    let mut idx = start;
+    let mut ops: Vec<Operation> = Vec::new();
+
     // TODO: all this logic + respective functions
     while idx < tokens.len() {
+        // logic for consuming and checking tabs at beginning of line
+        let mut tab_ok = true;
+        let mut tabs = 0;
+        for i in 0..tabdepth {
+            if !tab_ok || idx >= tokens.len() {
+                break;
+            }
+            if let Token::Tab = tokens[idx + i as usize] {
+                tabs += 1;
+            } else {
+                tab_ok = false;
+            }
+        }
+        idx += tabs;
+        if !tab_ok {
+            return Ok((ops, idx));
+        }
+
         match &tokens[idx] {
             Token::EndBlock => {
                 break;
             }
-            Token::Set => {}
+            Token::Set => {
+                idx += 1; // consume the set token
+                let (set, newidx) = make_set(tokens, idx, &devices)?;
+                ops.push(set);
+                idx = newidx;
+                // consume newline
+                if let Token::Newline = &tokens[idx] {
+                    idx += 1;
+                } else {
+                    return Err("Expected newline after set statement");
+                }
+            }
             Token::Goto => {}
             Token::Wait => {}
             Token::If => {}
@@ -217,5 +274,54 @@ fn make_block(tokens: &[Token], start: usize) -> Result<(String, Block, usize), 
         }
     }
 
-    Ok((block_name, Block { ops }, idx))
+    Ok((ops, idx))
+}
+
+fn make_set(
+    tokens: &[Token],
+    start: usize,
+    devices: &HashMap<String, Device>,
+) -> Result<(Operation, usize), &'static str> {
+    let mut idx = start;
+
+    // consume device name
+    let dev_name: String;
+    if let Token::Identifier(name) = &tokens[idx] {
+        dev_name = name.clone();
+        idx += 1;
+    } else {
+        return Err("Expected valid device name after \"set\" statement");
+    }
+
+    if !devices.contains_key(&dev_name) {
+        return Err("Expected valid device name after \"set\" statement");
+    }
+
+    let actuator: Actuator;
+    if let Device::Actuator(act) = devices.get(&dev_name).unwrap() {
+        actuator = act.clone();
+    } else {
+        return Err("Expected actuator device name after \"set\" statement");
+    }
+
+    // consume the value
+    let dev_val: f64;
+    if let Token::Value(val) = &tokens[idx] {
+        dev_val = val.clone();
+        idx += 1;
+    } else {
+        return Err("Expected valid device value after device name");
+    }
+
+    if !(dev_val <= actuator.max && dev_val >= actuator.min) {
+        return Err("Expected value in range of device range");
+    }
+
+    Ok((
+        Operation::Set {
+            actuator,
+            value: dev_val,
+        },
+        idx,
+    ))
 }

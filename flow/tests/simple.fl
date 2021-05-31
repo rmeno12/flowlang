@@ -1,5 +1,7 @@
+actuator motor
 sensor clock
 
 block firstblock
+    set motor 100
 endblock
 
