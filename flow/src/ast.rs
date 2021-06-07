@@ -57,9 +57,18 @@ pub enum Operation {
 
 #[derive(Debug)]
 pub enum Condition {
-    Base(Sensor, f64),
+    Base(Sensor, Comparator, f64),
     All(Vec<Condition>),
     Any(Vec<Condition>),
+}
+
+#[derive(Debug)]
+pub enum Comparator {
+    LT,
+    LTEQ,
+    EQ,
+    GT,
+    GTEQ,
 }
 
 pub fn make_ast(tokens: &[Token]) -> Result<AST, &'static str> {
@@ -248,6 +257,7 @@ fn make_statements(
 
         match &tokens[idx] {
             Token::EndBlock => {
+                // this probably shouldn't be here but not sure where else to put it for now
                 break;
             }
             Token::Set => {
@@ -255,6 +265,7 @@ fn make_statements(
                 let (set, newidx) = make_set(tokens, idx, &devices)?;
                 ops.push(set);
                 idx = newidx;
+
                 // consume newline
                 if let Token::Newline = &tokens[idx] {
                     idx += 1;
@@ -262,8 +273,40 @@ fn make_statements(
                     return Err("Expected newline after set statement");
                 }
             }
-            Token::Goto => {}
-            Token::Wait => {}
+            Token::Goto => {
+                idx += 1; // consume the goto token
+                let (goto, newidx) = make_goto(tokens, idx)?;
+                ops.push(goto);
+                idx = newidx;
+
+                // consume newline
+                if let Token::Newline = &tokens[idx] {
+                    idx += 1;
+                } else {
+                    return Err("Expected newline after set statement");
+                }
+            }
+            Token::Wait => {
+                idx += 1; // consume the wait
+
+                // consume colon
+                if let Token::Colon = &tokens[idx] {
+                    idx += 1
+                } else {
+                    return Err("Expected colon after wait statement");
+                }
+
+                // consume newline
+                if let Token::Newline = &tokens[idx] {
+                    idx += 1;
+                } else {
+                    return Err("Expected newline after colon");
+                }
+
+                let (wait, newidx) = make_wait(tokens, idx, devices, tabdepth)?;
+                ops.push(wait);
+                idx = newidx;
+            }
             Token::If => {}
             Token::Newline => {
                 idx += 1;
@@ -324,4 +367,162 @@ fn make_set(
         },
         idx,
     ))
+}
+
+fn make_goto(tokens: &[Token], start: usize) -> Result<(Operation, usize), &'static str> {
+    let mut idx = start;
+
+    // TODO: check that the name is valid
+    let block_name: String;
+    if let Token::Identifier(name) = &tokens[idx] {
+        block_name = name.clone();
+        idx += 1;
+    } else {
+        return Err("Expected block name after \"goto\" statement");
+    }
+
+    Ok((Operation::Goto { dest: block_name }, idx))
+}
+
+fn make_wait(
+    tokens: &[Token],
+    start: usize,
+    devices: &HashMap<String, Device>,
+    tabdepth: u8,
+) -> Result<(Operation, usize), &'static str> {
+    let mut idx = start;
+
+    let (condition, newidx) = make_condition(tokens, idx, devices, tabdepth)?;
+    idx = newidx;
+
+    Ok((Operation::Wait { condition }, idx))
+}
+
+fn make_condition(
+    tokens: &[Token],
+    start: usize,
+    devices: &HashMap<String, Device>,
+    tabdepth: u8,
+) -> Result<(Condition, usize), &'static str> {
+    let mut idx = start;
+
+    // logic for consuming and checking tabs at beginning of line
+    let mut tab_ok = true;
+    let mut tabs = 0;
+    for i in 0..tabdepth {
+        if !tab_ok || idx >= tokens.len() {
+            break;
+        }
+        if let Token::Tab = tokens[idx + i as usize] {
+            tabs += 1;
+        } else {
+            tab_ok = false;
+        }
+    }
+    idx += tabs;
+    if !tab_ok {
+        return Err("Invalid indentation on line after wait declaration");
+    }
+
+    // consume condition start
+    if let Token::ConditionStart = &tokens[idx] {
+        idx += 1;
+    } else {
+        return Err("Expected \"-\" to mark beginning of condition");
+    }
+
+    match &tokens[idx] {
+        Token::Any | Token::All => {
+            let kind = &tokens[idx];
+            idx += 1; // consume the any/all
+
+            // consume colon
+            if let Token::Colon = &tokens[idx] {
+                idx += 1
+            } else {
+                return Err("Expected colon after wait statement");
+            }
+
+            // consume newline
+            if let Token::Newline = &tokens[idx] {
+                idx += 1;
+            } else {
+                return Err("Expected newline after colon");
+            }
+
+            let mut conditions: Vec<Condition> = Vec::new();
+            while idx + tabdepth as usize + 1 < tokens.len() {
+                if let Token::Colon = &tokens[idx + tabdepth as usize + 1] {
+                    let (condition, newidx) = make_condition(tokens, idx, devices, tabdepth + 1)?;
+                    idx = newidx;
+                    conditions.push(condition);
+                } else {
+                    break;
+                }
+            }
+
+            if conditions.len() == 0 {
+                Err("Expected conditions after any/all statement")
+            } else {
+                match kind {
+                    Token::Any => Ok((Condition::Any(conditions), idx)),
+                    Token::All => Ok((Condition::All(conditions), idx)),
+                    _ => Err("Error in parsing, please report this bug"),
+                }
+            }
+        }
+        Token::Identifier(name) => {
+            let dev_name = name.clone();
+            idx += 1;
+
+            if !devices.contains_key(&dev_name) {
+                return Err("Expected valid device name after condition start");
+            }
+
+            let sensor: Sensor;
+            if let Device::Sensor(sens) = devices.get(&dev_name).unwrap() {
+                sensor = sens.clone();
+            } else {
+                return Err("Expected sensor device name after condition start");
+            }
+
+            let comparator: Comparator;
+            if let Token::Comparator(comp) = &tokens[idx] {
+                match comp.as_str() {
+                    "<" => {
+                        comparator = Comparator::LT;
+                    }
+                    "<=" => {
+                        comparator = Comparator::LTEQ;
+                    }
+                    "=" => {
+                        comparator = Comparator::EQ;
+                    }
+                    ">" => {
+                        comparator = Comparator::GT;
+                    }
+                    ">=" => {
+                        comparator = Comparator::GTEQ;
+                    }
+                    _ => {
+                        return Err("Error in parsing, please report this bug");
+                    }
+                }
+                idx += 1;
+            } else {
+                return Err("Expected comparator after device name in condition");
+            }
+
+            let val: f64;
+            if let Token::Value(v) = &tokens[idx] {
+                val = v.clone();
+                idx += 1;
+            } else {
+                return Err("Expected valid value after comparator in condition");
+            }
+
+            Ok((Condition::Base(sensor, comparator, val), idx))
+        }
+        _ => Err("Expected device name, any, or all after condition start"),
+    }
 }
