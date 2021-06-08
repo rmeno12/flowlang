@@ -398,6 +398,29 @@ fn make_wait(
     Ok((Operation::Wait { condition }, idx))
 }
 
+fn make_if(
+    tokens: &[Token],
+    start: usize,
+    devices: &HashMap<String, Device>,
+    tabdepth: u8,
+) -> Result<(Operation, usize), &'static str> {
+    let mut idx = start;
+
+    let (if_condition, newidx) = make_condition(tokens, idx, devices, tabdepth)?;
+    idx = newidx;
+
+    let (if_actions, newidx) = make_statements(tokens, idx, devices, tabdepth)?;
+    idx = newidx;
+
+    Ok((
+        Operation::IfElse {
+            if_actions,
+            if_condition,
+        },
+        idx,
+    ))
+}
+
 fn make_condition(
     tokens: &[Token],
     start: usize,
