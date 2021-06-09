@@ -47,7 +47,6 @@ pub enum Operation {
     IfElse {
         if_condition: Condition,
         if_actions: Vec<Operation>,
-        else_condition: Option<Condition>,
         else_actions: Option<Vec<Operation>>,
     },
     Goto {
@@ -219,7 +218,7 @@ fn make_block(
         return Err("Expected newline after block name");
     }
 
-    let (ops, newidx) = make_statements(tokens, idx, devices, 1)?;
+    let (ops, newidx) = make_statements(tokens, idx, devices, 1, false)?;
     idx = newidx;
 
     Ok((block_name, Block { ops }, idx))
@@ -230,35 +229,31 @@ fn make_statements(
     start: usize,
     devices: &HashMap<String, Device>,
     tabdepth: u8,
+    ifelse: bool,
 ) -> Result<(Vec<Operation>, usize), &'static str> {
     let mut idx = start;
     let mut ops: Vec<Operation> = Vec::new();
 
-    // TODO: all this logic + respective functions
     while idx < tokens.len() {
-        // logic for consuming and checking tabs at beginning of line
-        let mut tab_ok = true;
-        let mut tabs = 0;
-        for i in 0..tabdepth {
-            if !tab_ok || idx >= tokens.len() {
-                break;
-            }
-            if let Token::Tab = tokens[idx + i as usize] {
-                tabs += 1;
-            } else {
-                tab_ok = false;
-            }
-        }
-        idx += tabs;
-        if !tab_ok {
-            return Ok((ops, idx));
-        }
-
         match &tokens[idx] {
             Token::EndBlock => {
-                // this probably shouldn't be here but not sure where else to put it for now
                 break;
             }
+            Token::Newline => {
+                idx += 1;
+                continue;
+            }
+            _ => {}
+        }
+
+        if check_tabs(tokens, idx, tabdepth) {
+            idx = consume_tabs(tokens, idx, tabdepth)?;
+        } else {
+            break;
+        }
+
+        println!("{:?}", &tokens[idx]);
+        match &tokens[idx] {
             Token::Set => {
                 idx += 1; // consume the set token
                 let (set, newidx) = make_set(tokens, idx, &devices)?;
@@ -327,10 +322,16 @@ fn make_statements(
                 ops.push(ifelse);
                 idx = newidx;
             }
-            Token::Newline => {
-                idx += 1;
+            Token::Else => {
+                println!("ifelse: {}", ifelse);
+                if ifelse {
+                    break;
+                } else {
+                    return Err("Unexpected token");
+                }
             }
             _ => {
+                println!("{:?}", &tokens[idx..]);
                 return Err("Unexpected token");
             }
         }
@@ -411,7 +412,7 @@ fn make_wait(
 ) -> Result<(Operation, usize), &'static str> {
     let mut idx = start;
 
-    let (condition, newidx) = make_condition(tokens, idx, devices, tabdepth)?;
+    let (condition, newidx) = make_condition(tokens, idx, devices, tabdepth + 1)?;
     idx = newidx;
 
     Ok((Operation::Wait { condition }, idx))
@@ -428,7 +429,7 @@ fn make_if(
     let (if_condition, newidx) = make_condition(tokens, idx, devices, tabdepth + 1)?;
     idx = newidx;
 
-    let (if_actions, newidx) = make_statements(tokens, idx, devices, tabdepth + 1)?;
+    let (if_actions, newidx) = make_statements(tokens, idx, devices, tabdepth + 1, true)?;
     idx = newidx;
 
     // check if there is an else part
@@ -454,14 +455,10 @@ fn make_if(
         }
     }
 
-    let mut else_condition: Option<Condition> = None;
     let mut else_actions: Option<Vec<Operation>> = None;
 
     if is_else {
-        let (condition, newidx) = make_condition(tokens, idx, devices, tabdepth + 1)?;
-        idx = newidx;
-        else_condition = Some(condition);
-        let (actions, newidx) = make_statements(tokens, idx, devices, tabdepth + 1)?;
+        let (actions, newidx) = make_statements(tokens, idx, devices, tabdepth + 1, false)?;
         idx = newidx;
         else_actions = Some(actions);
     }
@@ -470,7 +467,6 @@ fn make_if(
         Operation::IfElse {
             if_condition,
             if_actions,
-            else_condition,
             else_actions,
         },
         idx,
@@ -485,25 +481,10 @@ fn make_condition(
 ) -> Result<(Condition, usize), &'static str> {
     let mut idx = start;
 
-    // logic for consuming and checking tabs at beginning of line
-    let mut tab_ok = true;
-    let mut tabs = 0;
-    for i in 0..tabdepth {
-        if !tab_ok || idx >= tokens.len() {
-            break;
-        }
-        if let Token::Tab = tokens[idx + i as usize] {
-            tabs += 1;
-        } else {
-            tab_ok = false;
-        }
-    }
-    idx += tabs;
-    if !tab_ok {
-        return Err("Invalid indentation on line after wait declaration");
-    }
+    idx = consume_tabs(tokens, idx, tabdepth)?;
 
     // consume condition start
+    // println!("{:?}", &tokens[idx..]);
     if let Token::ConditionStart = &tokens[idx] {
         idx += 1;
     } else {
@@ -600,8 +581,52 @@ fn make_condition(
                 return Err("Expected valid value after comparator in condition");
             }
 
+            // consume newline
+            if let Token::Newline = &tokens[idx] {
+                idx += 1;
+            } else {
+                return Err("Expected newline after colon");
+            }
+
             Ok((Condition::Base(sensor, comparator, val), idx))
         }
         _ => Err("Expected device name, any, or all after condition start"),
     }
+}
+
+fn check_tabs(tokens: &[Token], start: usize, tabdepth: u8) -> bool {
+    let mut tab_ok = true;
+
+    if tokens.len() < start + tabdepth as usize {
+        return false;
+    }
+
+    for i in 0..tabdepth {
+        if let Token::Tab = &tokens[start + i as usize] {
+        } else {
+            tab_ok = false;
+            break;
+        }
+    }
+
+    tab_ok
+}
+
+fn consume_tabs(tokens: &[Token], start: usize, tabdepth: u8) -> Result<usize, &'static str> {
+    let mut idx = start;
+
+    println!(
+        "tabdepth: {}, tokens: {:?}",
+        tabdepth,
+        &tokens[idx..=idx + tabdepth as usize]
+    );
+    for _ in 0..tabdepth {
+        if let Token::Tab = &tokens[idx] {
+            idx += 1;
+        } else {
+            return Err("Invalid indentation, expected a tab (4 spaces)");
+        }
+    }
+
+    Ok(idx)
 }

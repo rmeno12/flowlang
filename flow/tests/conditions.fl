@@ -1,0 +1,18 @@
+actuator motor
+sensor clock
+
+block firstblock
+    if:
+        - clock >= 15
+        set motor 1
+    else:
+        set motor 0
+
+    wait:
+        - any:
+            - clock = 11
+            - clock = 12
+            - all:
+                - clock >= 1
+                - clock >= 10
+endblock
