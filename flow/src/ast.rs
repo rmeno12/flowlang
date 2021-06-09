@@ -47,8 +47,8 @@ pub enum Operation {
     IfElse {
         if_condition: Condition,
         if_actions: Vec<Operation>,
-        else_condition: Condition,
-        else_actions: Vec<Operation>,
+        else_condition: Option<Condition>,
+        else_actions: Option<Vec<Operation>>,
     },
     Goto {
         dest: String,
@@ -73,7 +73,6 @@ pub enum Comparator {
 
 pub fn make_ast(tokens: &[Token]) -> Result<AST, &'static str> {
     let (devices, mut idx) = make_devices(&tokens)?;
-    // println!("{:?}", devices);
 
     // consume newline
     if let Token::Newline = &tokens[idx] {
@@ -307,7 +306,27 @@ fn make_statements(
                 ops.push(wait);
                 idx = newidx;
             }
-            Token::If => {}
+            Token::If => {
+                idx += 1; // consume the if
+
+                // consume colon
+                if let Token::Colon = &tokens[idx] {
+                    idx += 1
+                } else {
+                    return Err("Expected colon after if statement");
+                }
+
+                // consume newline
+                if let Token::Newline = &tokens[idx] {
+                    idx += 1;
+                } else {
+                    return Err("Expected newline after colon");
+                }
+
+                let (ifelse, newidx) = make_if(tokens, idx, devices, tabdepth)?;
+                ops.push(ifelse);
+                idx = newidx;
+            }
             Token::Newline => {
                 idx += 1;
             }
@@ -406,16 +425,53 @@ fn make_if(
 ) -> Result<(Operation, usize), &'static str> {
     let mut idx = start;
 
-    let (if_condition, newidx) = make_condition(tokens, idx, devices, tabdepth)?;
+    let (if_condition, newidx) = make_condition(tokens, idx, devices, tabdepth + 1)?;
     idx = newidx;
 
-    let (if_actions, newidx) = make_statements(tokens, idx, devices, tabdepth)?;
+    let (if_actions, newidx) = make_statements(tokens, idx, devices, tabdepth + 1)?;
     idx = newidx;
+
+    // check if there is an else part
+    let mut is_else = false;
+    if idx + tabdepth as usize + 1 < tokens.len() {
+        if let Token::Else = &tokens[idx + tabdepth as usize + 1] {
+            is_else = true;
+            idx += tabdepth as usize + 2;
+
+            // consume colon
+            if let Token::Colon = &tokens[idx] {
+                idx += 1
+            } else {
+                return Err("Expected colon after else statement");
+            }
+
+            // consume newline
+            if let Token::Newline = &tokens[idx] {
+                idx += 1;
+            } else {
+                return Err("Expected newline after colon");
+            }
+        }
+    }
+
+    let mut else_condition: Option<Condition> = None;
+    let mut else_actions: Option<Vec<Operation>> = None;
+
+    if is_else {
+        let (condition, newidx) = make_condition(tokens, idx, devices, tabdepth + 1)?;
+        idx = newidx;
+        else_condition = Some(condition);
+        let (actions, newidx) = make_statements(tokens, idx, devices, tabdepth + 1)?;
+        idx = newidx;
+        else_actions = Some(actions);
+    }
 
     Ok((
         Operation::IfElse {
-            if_actions,
             if_condition,
+            if_actions,
+            else_condition,
+            else_actions,
         },
         idx,
     ))
@@ -475,7 +531,7 @@ fn make_condition(
 
             let mut conditions: Vec<Condition> = Vec::new();
             while idx + tabdepth as usize + 1 < tokens.len() {
-                if let Token::Colon = &tokens[idx + tabdepth as usize + 1] {
+                if let Token::ConditionStart = &tokens[idx + tabdepth as usize + 1] {
                     let (condition, newidx) = make_condition(tokens, idx, devices, tabdepth + 1)?;
                     idx = newidx;
                     conditions.push(condition);
