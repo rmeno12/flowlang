@@ -252,7 +252,7 @@ fn make_statements(
             break;
         }
 
-        println!("{:?}", &tokens[idx]);
+        // println!("{:?}", &tokens[idx]);
         match &tokens[idx] {
             Token::Set => {
                 idx += 1; // consume the set token
@@ -323,7 +323,7 @@ fn make_statements(
                 idx = newidx;
             }
             Token::Else => {
-                println!("ifelse: {}", ifelse);
+                // println!("ifelse: {}", ifelse);
                 if ifelse {
                     break;
                 } else {
@@ -331,7 +331,7 @@ fn make_statements(
                 }
             }
             _ => {
-                println!("{:?}", &tokens[idx..]);
+                // println!("{:?}", &tokens[idx..]);
                 return Err("Unexpected token");
             }
         }
@@ -434,10 +434,10 @@ fn make_if(
 
     // check if there is an else part
     let mut is_else = false;
-    if idx + tabdepth as usize + 1 < tokens.len() {
-        if let Token::Else = &tokens[idx + tabdepth as usize + 1] {
+    if idx + (tabdepth as usize) < tokens.len() {
+        if let Token::Else = &tokens[idx + tabdepth as usize] {
             is_else = true;
-            idx += tabdepth as usize + 2;
+            idx += tabdepth as usize + 1; // consume tabs and else token
 
             // consume colon
             if let Token::Colon = &tokens[idx] {
@@ -615,11 +615,11 @@ fn check_tabs(tokens: &[Token], start: usize, tabdepth: u8) -> bool {
 fn consume_tabs(tokens: &[Token], start: usize, tabdepth: u8) -> Result<usize, &'static str> {
     let mut idx = start;
 
-    println!(
-        "tabdepth: {}, tokens: {:?}",
-        tabdepth,
-        &tokens[idx..=idx + tabdepth as usize]
-    );
+    // println!(
+    //     "tabdepth: {}, tokens: {:?}",
+    //     tabdepth,
+    //     &tokens[idx..=idx + tabdepth as usize]
+    // );
     for _ in 0..tabdepth {
         if let Token::Tab = &tokens[idx] {
             idx += 1;
