@@ -5,6 +5,6 @@ flowlang is a programming language for expressing flowcharts and other discrete 
 A flow consists of two parts: device declarations and a series of blocks.
 
 ### Todo
-- Syntactic correctness [WIP]
+- Syntactic correctness [mostly done]
 - Variable correctness (valid sensors/actuators, ranges for sensors/actuators)
 - Visualization
